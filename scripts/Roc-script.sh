@@ -105,3 +105,24 @@ echo "baidu.com"  > package/luci-app-passwall/luci-app-passwall/root/usr/share/p
 
 ./scripts/feeds update -i -a
 ./scripts/feeds install -a
+
+# ==========================================
+# 彻底剔除 Wi-Fi 相关驱动、固件和工具 (纯有线路由模式)
+# ==========================================
+echo "正在剔除 Wi-Fi 相关组件..."
+# 剔除高通 ath11k 驱动及固件
+sed -i '/CONFIG_PACKAGE_kmod-ath11k/d' .config
+sed -i '/CONFIG_PACKAGE_ath11k-firmware/d' .config
+# 剔除无线加密守护进程 (WPA supplicant / hostapd)
+sed -i '/CONFIG_PACKAGE_wpad/d' .config
+sed -i '/CONFIG_PACKAGE_hostapd/d' .config
+# 剔除无线配置工具及底层内核模块
+sed -i '/CONFIG_PACKAGE_iw/d' .config
+sed -i '/CONFIG_PACKAGE_kmod-cfg80211/d' .config
+sed -i '/CONFIG_PACKAGE_kmod-mac80211/d' .config
+# 剔除 LuCI 界面中的无线配置插件 (让后台更清爽)
+sed -i '/CONFIG_PACKAGE_luci-app-uwifi/d' .config
+sed -i '/CONFIG_PACKAGE_luci-proto-wifi/d' .config
+
+# 重新生成配置，确保依赖干净
+make defconfig
