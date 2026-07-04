@@ -53,8 +53,6 @@ defaults:
     shell: bash
 
 env:
-  GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
   TZ: Asia/Shanghai
 
 jobs:
@@ -183,15 +181,13 @@ jobs:
 
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
         cd "$OPENWRT_PATH"
-        "$GITHUB_WORKSPACE/$DIY_SCRIPT"
 
-    - name: Download DL Package(下载DL软件包)
+    - name: Download DL Package(下载 DL 软件包)
       env:
         CONFIG_FILE: ${{ inputs.config_file }}
       run: |
-        cat "$GITHUB_WORKSPACE/$CONFIG_FILE" "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE" > "$OPENWRT_PATH/.config"
+        cp "$GITHUB_WORKSPACE/$CONFIG_FILE" "$OPENWRT_PATH/.config"
         cd "$OPENWRT_PATH"
         if [ "${{ inputs.remove_sqm_scripts_nss }}" = "true" ]; then
           sed -i '/CONFIG_PACKAGE_sqm-scripts-nss=y/d' .config
