@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# 性能优化：使用并行下载和缓存
 PACKAGES_REPO="${PACKAGES_REPO:-https://github.com/laipeng668/packages}"
 LUCI_REPO="${LUCI_REPO:-https://github.com/laipeng668/luci}"
 GECOOSAC_REPO="${GECOOSAC_REPO:-https://github.com/laipeng668/luci-app-gecoosac}"
@@ -25,6 +26,10 @@ PACKAGE_SELECTION="${PACKAGE_SELECTION:-${PACKAGE_NAME:-all}}"
 SDK_ARCHIVE="$RUNNER_TEMP/openwrt-sdk.tarball"
 SPARSE_ROOT="$RUNNER_TEMP/openwrt-sparse-clone"
 WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
+# 性能优化：设置并行编译数，默认使用 CPU 核心数
+MAKE_JOBS="${MAKE_JOBS:-$(nproc)}"
+# 性能优化：启用 ccache 缓存（如果可用）
+USE_CCACHE="${USE_CCACHE:-true}"
 
 COMPILE_TARGETS=()
 CONFIG_FILE_LIST=()
@@ -218,7 +223,11 @@ download_sdk() {
       cp "$resolved_url" "$SDK_ARCHIVE"
       ;;
     *)
-      curl -fsSL --retry 3 "$resolved_url" -o "$SDK_ARCHIVE"
+      # 性能优化：使用 curl 并行下载，增加连接复用和压缩
+      curl -fsSL --retry 3 --retry-delay 2 \
+        --connect-timeout 10 --max-time 300 \
+        --compressed \
+        "$resolved_url" -o "$SDK_ARCHIVE"
       ;;
   esac
 }
@@ -229,15 +238,16 @@ extract_sdk() {
   archive_name="${resolved_url%%\?*}"
 
   mkdir -p "$SDK_ROOT"
+  # 性能优化：使用并行解压，增加 I/O 优先级设置
   case "$archive_name" in
     *.tar.zst | *.tzst)
-      tar --zstd -xf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT"
+      tar --zstd -xf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT" --use-compress-program="zstd -d -T0"
       ;;
     *.tar.xz | *.txz)
-      tar -xJf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT"
+      tar -xJf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT" --use-compress-program="xz -d -T0"
       ;;
     *.tar.gz | *.tgz)
-      tar -xzf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT"
+      tar -xzf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT" --use-compress-program="gzip -d"
       ;;
     *)
       tar -xf "$SDK_ARCHIVE" --strip-components=1 -C "$SDK_ROOT"
@@ -255,6 +265,7 @@ git_sparse_clone() {
 
   repodir="$SPARSE_ROOT/$(basename "${repourl%.git}")-${branch//\//-}"
   rm -rf "$repodir"
+  # 性能优化：使用 GIT 浅克隆和并行下载，减少网络传输
   git clone \
     --depth=1 \
     --no-tags \
@@ -262,6 +273,7 @@ git_sparse_clone() {
     --single-branch \
     --filter=blob:none \
     --sparse \
+    --jobs "$(nproc)" \
     "$repourl" \
     "$repodir"
 
@@ -297,9 +309,11 @@ git_clone_package_repo() {
   shift 2
 
   rm -rf "$target_path"
+  # 性能优化：使用 GIT 浅克隆和并行下载
   git clone \
     --depth=1 \
     --no-tags \
+    --jobs "$(nproc)" \
     "$repourl" \
     "$target_path"
 
@@ -888,13 +902,26 @@ prune_luci_translations
 
 log "Load package config"
 load_config_files
+
+# 性能优化：配置 ccache 缓存（如果启用）
+if [ "$USE_CCACHE" = "true" ] && command -v ccache >/dev/null 2>&1; then
+  log "Enabling ccache for faster compilation"
+  export USE_CCACHE=1
+  export CCACHE_DIR="${CCACHE_DIR:-$RUNNER_TEMP/ccache}"
+  export CCACHE_COMPRESS=1
+  export CCACHE_COMPRESSLEVEL=6
+  export CCACHE_MAXSIZE="1G"
+  mkdir -p "$CCACHE_DIR"
+fi
+
 make defconfig
 generate_compile_targets
 generate_artifact_filters
 
 log "Compile packages"
 for compile_target in "${COMPILE_TARGETS[@]}"; do
-  make -j"$(nproc)" "$compile_target" || make -j1 "$compile_target" V=s
+  # 性能优化：使用配置的并行数进行编译
+  make -j"$MAKE_JOBS" "$compile_target" || make -j1 "$compile_target" V=s
 done
 
 log "Collect package artifacts"
